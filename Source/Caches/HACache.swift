@@ -44,8 +44,9 @@ public class HACache<ValueType> {
         self.connection = connection
         self.populateInfo = populate
         self.subscribeInfo = subscribe
+        self.subscribeOnlyInfo = nil
 
-        self.start = { connection, cache in
+        self.start = { connection, cache, _ in
             Self.startPopulate(for: populate, on: connection, cache: cache) { cacheResult in
                 switch cacheResult {
                 case let .success(cache):
@@ -70,6 +71,33 @@ public class HACache<ValueType> {
         )
     }
 
+    /// Create a cache that relies on subscription updates without initial population.
+    ///
+    /// - Parameters:
+    ///   - connection: The connection to use and watch
+    ///   - subscribe: The info (one or more) for what subscriptions to start for updates or triggers for populating
+    public init(
+        connection: HAConnection,
+        subscribe: HACacheSubscribeInfo<ValueType?>
+    ) {
+        self.connection = connection
+        self.populateInfo = nil
+        self.subscribeInfo = nil
+        self.subscribeOnlyInfo = subscribe
+
+        self.start = { connection, cache, state in
+            state.isWaitingForPopulate = false
+            return Self.startSubscribe(to: subscribe, on: connection, cache: cache)
+        }
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(checkStateAndStart),
+            name: HAConnectionState.didTransitionToStateNotification,
+            object: connection
+        )
+    }
+
     /// Create a cache by mapping an existing cache's value
     /// - Parameters:
     ///   - incomingCache: The cache to map values from; this is kept as a strong reference
@@ -81,7 +109,8 @@ public class HACache<ValueType> {
         self.connection = incomingCache.connection
         self.populateInfo = nil
         self.subscribeInfo = nil
-        self.start = { _, someCache in
+        self.subscribeOnlyInfo = nil
+        self.start = { _, someCache, _ in
             // unfortunately, using this value directly crashes the swift compiler, so we call into it with this
             let cache: HACache<ValueType> = someCache
             return incomingCache.subscribe { [weak cache] _, value in
@@ -97,6 +126,7 @@ public class HACache<ValueType> {
         }
     }
 
+    #if DEBUG
     /// Create a cache with a constant value
     ///
     /// This is largely intended for tests or other situations where you want a cache you can control more strongly.
@@ -104,15 +134,17 @@ public class HACache<ValueType> {
     /// - Parameter constantValue: The value to keep for state
     public init(constantValue: ValueType) {
         self.connection = nil
-        self.start = { _, _ in
+        self.start = { _, _, _ in
             fatalError("connection is never non-nil; this cannot be called")
         }
         self.populateInfo = nil
         self.subscribeInfo = nil
+        self.subscribeOnlyInfo = nil
         state.mutate { state in
             state.current = constantValue
         }
     }
+    #endif
 
     deinit {
         state.read { state in
@@ -281,7 +313,7 @@ public class HACache<ValueType> {
     internal weak var connection: HAConnection?
     /// Block to begin the prepare -> subscribe lifecycle
     /// This is a block to erase all the intermediate types for prepare/subscribe
-    private let start: (HAConnection, HACache<ValueType>) -> HACancellable
+    private let start: (HAConnection, HACache<ValueType>, inout State) -> HACancellable
     /// The callback queue to perform subscription handlers on.
     private var callbackQueue: DispatchQueue {
         connection?.callbackQueue ?? .main
@@ -293,6 +325,9 @@ public class HACache<ValueType> {
     /// If this cache was created with subscribe info, this contains that info
     /// This is largely intended for tests and is not used internally.
     public let subscribeInfo: [HACacheSubscribeInfo<ValueType>]?
+    /// If this cache was created with subscribe info, this contains that info
+    /// This is largely intended for tests and is not used internally.
+    public let subscribeOnlyInfo: HACacheSubscribeInfo<ValueType?>?
 
     /// Do the underlying populate send
     /// - Parameters:
@@ -336,20 +371,52 @@ public class HACache<ValueType> {
     private static func startSubscribe<ValueType>(
         to subscription: HACacheSubscribeInfo<ValueType>,
         on connection: HAConnection,
-        populate: HACachePopulateInfo<ValueType>,
+        populate: HACachePopulateInfo<ValueType>?,
         cache: HACache<ValueType>
     ) -> HACancellable {
         subscription.start(connection, { [weak cache, weak connection] handler in
-            guard let cache = cache, let connection = connection else { return }
+            guard let cache, let connection else { return }
             cache.state.mutate { state in
                 switch handler(state.current!) {
                 case .ignore: break
                 case .reissuePopulate:
-                    let populateToken = startPopulate(for: populate, on: connection, cache: cache)
-                    state.appendRequestToken(populateToken)
+                    if let populate {
+                        let populateToken = startPopulate(for: populate, on: connection, cache: cache)
+                        state.appendRequestToken(populateToken)
+                    }
                 case let .replace(value):
                     state.current = value
                     cache.notify(subscribers: state.subscribers, for: value)
+                }
+            }
+        })
+    }
+
+    /// Do the underlying subscribe with optional population
+    /// - Parameters:
+    ///   - subscription: The subscription info
+    ///   - connection: The connection to subscribe on
+    ///   - cache: The cache whose state should be updated
+    /// - Returns: The cancellable token for the subscription
+    private static func startSubscribe<ValueType>(
+        to subscription: HACacheSubscribeInfo<ValueType?>,
+        on connection: HAConnection,
+        cache: HACache<ValueType>
+    ) -> HACancellable {
+        subscription.start(connection, { [weak cache] handler in
+            guard let cache else { return }
+            cache.state.mutate { state in
+                switch handler(state.current) {
+                case .ignore: break
+                case .reissuePopulate:
+                    /* no-op */
+                    break
+                case let .replace(value):
+                    state.current = value
+
+                    if let value {
+                        cache.notify(subscribers: state.subscribers, for: value)
+                    }
                 }
             }
         })
@@ -386,7 +453,7 @@ public class HACache<ValueType> {
                 return
             }
             state.isWaitingForPopulate = true
-            let token = start(connection, self)
+            let token = start(connection, self, &state)
             state.setRequestTokens([token], cancellingPrevious: true)
         }
     }

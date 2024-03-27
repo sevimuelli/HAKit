@@ -9,13 +9,11 @@ public extension HATypedSubscription {
             "event_type": HAEventType.stateChanged.rawValue!,
         ]))
     }
-}
 
-public extension HATypedRequest {
-    /// Get the state of all entities
-    /// - Returns: A typed request that can be sent via `HAConnection`
-    static func getStates() -> HATypedRequest<[HAEntity]> {
-        .init(request: .init(type: .getStates, data: [:]))
+    /// Listen for compressed state changes of all entities
+    /// - Returns: A typed subscriptions that can be sent via `HAConnection`
+    static func subscribeEntities() -> HATypedSubscription<HACompressedStatesUpdates> {
+        .init(request: .init(type: .subscribeEntities, data: [:]))
     }
 }
 
@@ -39,9 +37,9 @@ public struct HAResponseEventStateChanged: HADataDecodable {
         let event = try HAResponseEvent(data: data)
         let eventData = HAData.dictionary(event.data)
 
-        self.init(
+        try self.init(
             event: event,
-            entityId: try eventData.decode("entity_id"),
+            entityId: eventData.decode("entity_id"),
             oldState: try? eventData.decode("old_state"),
             newState: try? eventData.decode("new_state")
         )
