@@ -72,6 +72,14 @@ internal class HAResponseControllerTests: XCTestCase {
         }
     }
 
+    func testPeerClosedEvent() {
+        fireConnected()
+        controller.didReceive(event: .peerClosed)
+        waitForCallback()
+        XCTAssertEqual(delegate.lastPhase, .disconnected(error: nil, forReset: false))
+        XCTAssertNil(delegate.lastReceived)
+    }
+
     func testAuthFlow() throws {
         fireConnected()
         try fireText(
@@ -240,6 +248,18 @@ internal class HAResponseControllerTests: XCTestCase {
         )
         waitForCallback()
         XCTAssertEqual(delegate.lastReceived, .result(identifier: 2, result: .success(.dictionary(resultDictionary))))
+    }
+
+    func testDidWriteEventLogs() {
+        let expectation = expectation(description: "Receive log")
+        HAGlobal.log = { level, message in
+            XCTAssertEqual(level, .info)
+            XCTAssertEqual(message, "Data written")
+            HAGlobal.log = { _, _ in }
+            expectation.fulfill()
+        }
+        controller.didWrite()
+        wait(for: [expectation], timeout: 2)
     }
 }
 

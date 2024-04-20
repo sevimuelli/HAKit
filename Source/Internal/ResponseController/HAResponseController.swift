@@ -36,6 +36,7 @@ internal protocol HAResponseController: AnyObject {
     var phase: HAResponseControllerPhase { get }
 
     func reset()
+    func didWrite()
     func didReceive(event: Starscream.WebSocketEvent)
     func didReceive(
         for identifier: HARequestIdentifier,
@@ -124,6 +125,9 @@ internal class HAResponseControllerImpl: HAResponseController {
         case let .error(error):
             HAGlobal.log(.error, "Error: \(String(describing: error))")
             phase = .disconnected(error: error, forReset: false)
+        case .peerClosed:
+            HAGlobal.log(.info, "Peer closed")
+            phase = .disconnected(error: nil, forReset: false)
         }
     }
 
@@ -186,5 +190,9 @@ internal class HAResponseControllerImpl: HAResponseController {
                 }
             }
         }
+    }
+
+    func didWrite() {
+        HAGlobal.log(.info, "Data written")
     }
 }
