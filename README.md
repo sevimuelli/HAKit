@@ -223,7 +223,7 @@ This library contains optional additions for use with PromiseKit. See the [sourc
 To install the library, either add it as a dependency in a `Package.swift` like:
 
 ```swift
-.Package(url: "https://github.com/home-assistant/HAKit.git", majorVersion: 0)
+.package(url: "https://github.com/home-assistant/HAKit", from: Version(0, 4, 2))
 ```
 
 To add it to an Xcode project, you can do this by adding the URL to File > Swift Packages > Add Package Dependency. You will find a few targets available:
@@ -236,7 +236,9 @@ To add it to an Xcode project, you can do this by adding the URL to File > Swift
 Add the following line to your Podfile:
 
 ```ruby
-pod "HAKit", "~> 0.3"
+pod "HAKit", "~> 0.4.2"
+# We are working from a fork of Starscream due to a necessary fix, please specify in your podfile
+pod 'Starscream', git: 'https://github.com/bgoncal/starscream', branch: 'ha-URLSession-fix'
 # pod "HAKit/PromiseKit" # optional, for PromiseKit support
 # pod "HAKit/Mocks" # optional, for tests
 ```
