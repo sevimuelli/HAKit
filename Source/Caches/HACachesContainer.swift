@@ -1,3 +1,5 @@
+import Foundation
+
 /// A cache key for `HACachesContainer`
 public protocol HACacheKey {
     /// The value type in the cache, e.g. `T` in `HACache<T>`
@@ -6,9 +8,14 @@ public protocol HACacheKey {
     ///
     /// This is called exactly once per connection per cache key.
     ///
-    /// - Parameter connection: The connection to create on
+    /// - Parameters:
+    ///   - connection: The connection to create on
+    ///   - data: The data passed to connection request
     /// - Returns: The cache you want to associate with the key
-    static func create(connection: HAConnection) -> HACache<Value>
+    static func create(
+        connection: HAConnection,
+        data: [String: Any]
+    ) -> HACache<Value>
 }
 
 /// Container for caches
@@ -35,9 +42,14 @@ public protocol HACacheKey {
 ///
 /// Then, access it from a connection like `connection.caches.yourValueType`.
 public class HACachesContainer {
+    struct CacheEntry {
+        let data: [String: Any]
+        let cache: Any
+    }
+
     /// Our current initialized caches. We key by the ObjectIdentifier of the meta type, which guarantees a unique
     /// cache entry per key since the identifier is globally unique per type.
-    private var values: [ObjectIdentifier: Any] = [:]
+    private(set) var values: [ObjectIdentifier: [CacheEntry]] = [:]
     /// The connection we're chained off. This is unowned to avoid a cyclic reference. We expect to crash in this case.
     internal unowned let connection: HAConnection
 
@@ -56,16 +68,30 @@ public class HACachesContainer {
     /// - SeeAlso: `HACachesContainer` class description for how to use keys to retrieve caches.
     /// - Subscript: The key to look up
     /// - Returns: Either the existing cache for the key, or a new one created on-the-fly if none was available
-    public subscript<KeyType: HACacheKey>(_ key: KeyType.Type) -> HACache<KeyType.Value> {
+    public subscript<KeyType: HACacheKey>(_ key: KeyType.Type, data: [String: Any] = [:]) -> HACache<KeyType.Value> {
         // ObjectIdentifier is globally unique per class _or_ meta type, and we're using meta type here
         let key = ObjectIdentifier(KeyType.self)
 
-        if let value = values[key] as? HACache<KeyType.Value> {
-            return value
+        if let cacheEntries = values[key], let cacheEntry = cacheEntries.first(where: { entry in
+            // Avoid unecessary json serialization to compare dictionaries
+            if entry.data.isEmpty, data.isEmpty {
+                return true
+            }
+
+            let currentData = try? JSONSerialization.data(withJSONObject: entry.data, options: .prettyPrinted)
+            let requestedData = try? JSONSerialization.data(withJSONObject: data, options: .prettyPrinted)
+
+            return currentData == requestedData
+        }), let cache = cacheEntry.cache as? HACache<KeyType.Value> {
+            return cache
         }
 
-        let value = KeyType.create(connection: connection)
-        values[key] = value
-        return value
+        let cache = KeyType.create(connection: connection, data: data)
+        if values[key] == nil {
+            values[key] = [.init(data: data, cache: cache)]
+        } else {
+            values[key]?.append(CacheEntry(data: data, cache: cache))
+        }
+        return cache
     }
 }
